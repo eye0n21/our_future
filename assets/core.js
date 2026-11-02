@@ -59,6 +59,20 @@ export function fullYears(birth, date) {
   return years;
 }
 
+// 달 끝을 넘으면 그 달의 마지막 날로 맞춘다(1월 31일 + 1개월 = 2월 28일).
+export function addMonths(date, months) {
+  const target = new Date(date.getFullYear(), date.getMonth() + months, 1);
+  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(date.getDate(), lastDay));
+  return target;
+}
+
+// 만 개월 수.
+export function fullMonths(birth, date) {
+  const months = (date.getFullYear() - birth.getFullYear()) * 12 + date.getMonth() - birth.getMonth();
+  return addMonths(birth, months) > date ? months - 1 : months;
+}
+
 // 주차 계산의 기준은 항상 "예정일 - 280일"이다. 예정일만 고치면 전부 재계산된다.
 export function resolveConfig(raw) {
   const lmpFromFile = parseDate(raw.lmp);
@@ -216,6 +230,59 @@ export function pickNextSchedule(items, date = today()) {
   const open = items.filter((item) => !item.done && item.date >= key);
   const todays = open.filter((item) => item.date === key);
   return todays.length ? todays : open.slice(0, 1);
+}
+
+// 한 마디: 최신순. 날짜가 미래인 것은 그날이 올 때까지 숨긴다.
+export async function loadNotes(date = today()) {
+  const items = (await loadJson('content/notes.json')) ?? [];
+  return items
+    .filter((item) => parseDate(item.date) && parseDate(item.date) <= date && item.text)
+    .sort((a, b) => b.date.localeCompare(a.date));
+}
+
+export async function loadGrowth() {
+  const items = (await loadJson('content/growth.json')) ?? [];
+  return items.filter((item) => parseDate(item.date)).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// 접종: 완료, 시작 시기가 된 것, 아직 이른 것으로 나눈다.
+export function groupVaccines(doses, birth, date = today()) {
+  const withDate = doses.map((dose) => ({ ...dose, start: addMonths(birth, Number(dose.fromMonths) || 0) }));
+  return {
+    done: withDate.filter((dose) => dose.done),
+    due: withDate.filter((dose) => !dose.done && dose.start <= date),
+    upcoming: withDate.filter((dose) => !dose.done && dose.start > date).sort((a, b) => a.start - b.start),
+  };
+}
+
+const PREGNANCY_DAY_MILESTONES = {
+  100: { title: 'D-100', text: '아기를 만나기까지 100일 남았어요.' },
+  50: { title: 'D-50', text: '아기를 만나기까지 50일 남았어요.' },
+  30: { title: 'D-30', text: '아기를 만나기까지 30일 남았어요.' },
+  0: { title: '오늘이 출산 예정일이에요', text: '그동안 정말 고생 많았어요.' },
+};
+const PREGNANCY_WEEK_MILESTONES = {
+  13: { title: '임신 중기에 들어섰어요', text: '여기까지 함께 잘 왔어요.' },
+  28: { title: '임신 후기에 들어섰어요', text: '이제 만날 날이 점점 가까워져요.' },
+};
+
+// 오늘 축하할 일. 임신 중에는 날짜 기념일이 주차 기념일보다 앞선다.
+// 백일은 태어난 날을 1일로 세는 관습을 따르므로 생후 99일이다.
+export function pickMilestone(config, date = today()) {
+  if (config.birthDate) {
+    const days = daysBetween(config.birthDate, date);
+    if (days === 0) return { title: '우리 아기가 태어났어요', text: '세상에 온 걸 환영해.' };
+    if (days === 49) return { title: '오늘은 50일이에요', text: '하루하루 고마운 날들이에요.' };
+    if (days === 99) return { title: '오늘은 백일이에요', text: '백 일 동안 정말 잘 자라 주었어요.' };
+    const isBirthday = date.getMonth() === config.birthDate.getMonth() && date.getDate() === config.birthDate.getDate();
+    const years = fullYears(config.birthDate, date);
+    if (isBirthday && years === 1) return { title: '오늘은 첫돌이에요', text: '첫 번째 생일을 축하해.' };
+    if (isBirthday && years > 1) return { title: `오늘은 ${years}번째 생일이에요`, text: '생일을 축하해.' };
+    return null;
+  }
+  const left = daysBetween(date, config.dueDate);
+  if (PREGNANCY_DAY_MILESTONES[left]) return PREGNANCY_DAY_MILESTONES[left];
+  return PREGNANCY_WEEK_MILESTONES[pregnancyAge(date, config.lmp).week] ?? null;
 }
 
 const REMINDER_LEAD_WEEKS = 2;
